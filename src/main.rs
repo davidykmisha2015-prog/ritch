@@ -78,7 +78,15 @@ fn main() {
         println!("{BLUE}{BOLD}                                                /____/   {RESET}");
         println!("{WHITE}──────────────────────────────────────────────────────────{RESET}");
         println!("  {CYAN}\u{e8da}  IDE{RESET}    {BOLD}AntiGravity{RESET}");
-        }
+    } else {
+        println!("{WHITE}{BOLD}    ____  _______________________ {RESET}");
+        println!("{WHITE}{BOLD}   / __ \\/  _/_  __/ ____/ / / /  {RESET}");
+        println!("{WHITE}{BOLD}  / /_/ // /  / / / /   / /_/ /   {RESET}");
+        println!("{WHITE}{BOLD} / _, _// /  / / / /___/ __  /    {RESET}");
+        println!("{WHITE}{BOLD}/_/ |_/___/ /_/  \\____/_/ /_/     {RESET}");
+        println!("{WHITE}----------------------------------{RESET}");
+        println!("  {WHITE}\u{f0aff} os{RESET}        {BOLD}Unknown{RESET}");
     }
+}
 
 
