@@ -17,7 +17,8 @@ Build and install directly from the repository:
 ```bash
 cargo install --git [https://github.com/davidykmisha2015-prog/ritch](https://github.com/davidykmisha2015-prog/ritch)
 ```
-💡 **Carog:** Make sure you installed cargo in your system!
+---
+💡 **Cargo:** Make sure you installed cargo in your system!
 
 ## Usage
 
