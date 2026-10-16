@@ -6,8 +6,28 @@ A fast and minimalist terminal utility written in Rust with zero dependencies.
 
 ## Installation
 
-### Nix / NixOS (Recommended)
-Run directly via Nix Flakes without manual installation:
+### NixOS (via Flakes)
+1. Add `ritch` to your `flake.nix` inputs:
+
+```nix
+{
+  inputs = {
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
+    ritch.url = "github:davidykmisha2015-prog/ritch";
+  };
+}
+```
+
+2. Add the package to your `environment.systemPackages` (e.g., in `configuration.nix`):
+
+```nix
+environment.systemPackages = [
+  inputs.ritch.packages.${pkgs.system}.default
+];
+```
+
+---
+#### Or run it directly without installation:
 ```bash
 nix run github:davidykmisha2015-prog/ritch
 ```
@@ -15,10 +35,10 @@ nix run github:davidykmisha2015-prog/ritch
 ### Other Linux Distros (via Cargo)
 Build and install directly from the repository:
 ```bash
-cargo install --git [https://github.com/davidykmisha2015-prog/ritch](https://github.com/davidykmisha2015-prog/ritch)
+cargo install --git https://github.com/davidykmisha2015-prog/ritch
 ```
----
-> 💡 **Cargo:** Make sure you installed cargo in your system!
+
+> 💡 **Note:** Make sure you have `cargo` installed on your system!
 
 ## Usage
 
@@ -30,4 +50,5 @@ ritch --logo arch
 ---
 > 💡 **Easter Egg:** There is one secret rainbow banner hidden inside `src/main.rs` that isn't a Linux distro at all.
 
-This project use MIT license
+## License
+This project is licensed under the MIT License.
