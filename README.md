@@ -28,6 +28,6 @@ ritch --logo arch
 ```
 
 ---
-> 💡 **Easter Egg:** There is one secret rainbow banner hidden inside `src/main.rs` that isn't a Linux distro at all. Can you defy *gravity* and find the `--logo` name for it?
+> 💡 **Easter Egg:** There is one secret rainbow banner hidden inside `src/main.rs` that isn't a Linux distro at all.
 
 This project use MIT license
