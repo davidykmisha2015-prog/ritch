@@ -2,11 +2,11 @@
 
 ![ritch screenshot](image.png)
 
-A fast and minimalist terminal system fetch utility written in Rust with zero external dependencies.
+A fast and minimalist terminal system fetch utility written in Rust with declarative Nix configuration.
 
 ## Features
 
-- Zero external crates (pure Rust standard library)
+- Native Nix evaluation on NixOS (`nix-instantiate`) and `rnix` AST parser on other distros so everyone can run `ritch` without installing Nix
 - Built-in ASCII logos for popular Linux distributions
 - Displays OS and Linux kernel version with Nerd Font icons
 - Declarative configuration in Nix format (`~/.config/ritch/config.nix`)

@@ -1,5 +1,9 @@
-use std::fs;
+use std::collections::HashMap;
 use std::env;
+use std::fs;
+use std::process::Command;
+
+use rnix::ast::{self, BinOpKind, HasEntry, InterpolPart, UnaryOpKind};
 
 // ANSI кольори
 const RESET: &str = "\x1b[0m";
@@ -30,15 +34,163 @@ const DEFAULT_CONFIG: &str = r#"# Конфігурація ritch (Nix форма
 }
 "#;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum NixValue {
+    Str(String),
+    Bool(bool),
+}
+
+fn eval_expr(expr: &ast::Expr, vars: &HashMap<String, NixValue>) -> Option<NixValue> {
+    match expr {
+        ast::Expr::Str(s) => {
+            let mut result = String::new();
+            for part in s.normalized_parts() {
+                match part {
+                    InterpolPart::Literal(lit) => result.push_str(&lit),
+                    InterpolPart::Interpolation(interp) => {
+                        if let Some(inner) = interp.expr() {
+                            match eval_expr(&inner, vars)? {
+                                NixValue::Str(val) => result.push_str(&val),
+                                NixValue::Bool(b) => result.push_str(if b { "true" } else { "false" }),
+                            }
+                        }
+                    }
+                }
+            }
+            Some(NixValue::Str(result))
+        }
+        ast::Expr::Ident(ident) => {
+            let token = ident.ident_token()?;
+            match token.text() {
+                "true" => Some(NixValue::Bool(true)),
+                "false" => Some(NixValue::Bool(false)),
+                other => vars.get(other).cloned(),
+            }
+        }
+        ast::Expr::Paren(paren) => paren.expr().and_then(|e| eval_expr(&e, vars)),
+        ast::Expr::IfElse(ifelse) => {
+            let cond = eval_expr(&ifelse.condition()?, vars)?;
+            if matches!(cond, NixValue::Bool(true)) {
+                eval_expr(&ifelse.body()?, vars)
+            } else {
+                eval_expr(&ifelse.else_body()?, vars)
+            }
+        }
+        ast::Expr::UnaryOp(unary) => match (unary.operator()?, eval_expr(&unary.expr()?, vars)?) {
+            (UnaryOpKind::Invert, NixValue::Bool(b)) => Some(NixValue::Bool(!b)),
+            _ => None,
+        },
+        ast::Expr::BinOp(bin) => {
+            let lhs = eval_expr(&bin.lhs()?, vars)?;
+            let rhs = eval_expr(&bin.rhs()?, vars)?;
+            match (bin.operator()?, lhs, rhs) {
+                (BinOpKind::Equal, a, b) => Some(NixValue::Bool(a == b)),
+                (BinOpKind::NotEqual, a, b) => Some(NixValue::Bool(a != b)),
+                (BinOpKind::Add, NixValue::Str(a), NixValue::Str(b)) => Some(NixValue::Str(a + &b)),
+                (BinOpKind::And, NixValue::Bool(a), NixValue::Bool(b)) => Some(NixValue::Bool(a && b)),
+                (BinOpKind::Or, NixValue::Bool(a), NixValue::Bool(b)) => Some(NixValue::Bool(a || b)),
+                (BinOpKind::Implication, NixValue::Bool(a), NixValue::Bool(b)) => {
+                    Some(NixValue::Bool(!a || b))
+                }
+                _ => None,
+            }
+        }
+        ast::Expr::Apply(apply) => {
+            let func = apply.lambda()?.to_string();
+            let arg = eval_expr(&apply.argument()?, vars)?;
+            match (func.trim(), arg) {
+                ("builtins.getEnv" | "getEnv", NixValue::Str(var)) => {
+                    Some(NixValue::Str(env::var(&var).unwrap_or_default()))
+                }
+                ("toString" | "builtins.toString", NixValue::Str(s)) => Some(NixValue::Str(s)),
+                ("toString" | "builtins.toString", NixValue::Bool(b)) => {
+                    Some(NixValue::Str(if b { "1".to_string() } else { String::new() }))
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+fn attr_name(attrpath: &ast::Attrpath, vars: &HashMap<String, NixValue>) -> Option<String> {
+    let attr = attrpath.attrs().next()?;
+    match attr {
+        ast::Attr::Ident(ident) => Some(ident.ident_token()?.text().to_string()),
+        ast::Attr::Str(s) => match eval_expr(&ast::Expr::Str(s), vars)? {
+            NixValue::Str(val) => Some(val),
+            NixValue::Bool(_) => None,
+        },
+        ast::Attr::Dynamic(_) => None,
+    }
+}
+
+fn parse_nix_ast(nix_src: &str) -> Option<HashMap<String, NixValue>> {
+    let root = rnix::Root::parse(nix_src);
+    let mut expr = root.tree().expr()?;
+    let mut vars = HashMap::new();
+
+    // Розгортаємо дужки, `with ...;` та `let ... in { ... }` у rnix
+    loop {
+        match expr {
+            ast::Expr::Paren(paren) => expr = paren.expr()?,
+            ast::Expr::With(with_expr) => expr = with_expr.body()?,
+            ast::Expr::LetIn(let_in) => {
+                for entry in let_in.attrpath_values() {
+                    if let (Some(path), Some(val_expr)) = (entry.attrpath(), entry.value())
+                        && let (Some(key), Some(val)) = (attr_name(&path, &vars), eval_expr(&val_expr, &vars))
+                    {
+                        vars.insert(key, val);
+                    }
+                }
+                expr = let_in.body()?;
+            }
+            _ => break,
+        }
+    }
+
+    let ast::Expr::AttrSet(set) = expr else {
+        return None;
+    };
+
+    let is_rec = set.rec_token().is_some();
+    let mut map = HashMap::new();
+    for entry in set.attrpath_values() {
+        if let (Some(path), Some(val_expr)) = (entry.attrpath(), entry.value())
+            && let (Some(key), Some(val)) = (attr_name(&path, &vars), eval_expr(&val_expr, &vars))
+        {
+            if is_rec {
+                vars.insert(key.clone(), val.clone());
+            }
+            map.insert(key, val);
+        }
+    }
+    Some(map)
+}
+
+fn detect_system_distro() -> String {
+    let content = fs::read_to_string("/etc/os-release")
+        .expect("Не вдалось відкрити файл, перевірте чи файл є чи він не пошкоджений");
+    for line in content.lines() {
+        if let Some(val) = line.strip_prefix("ID=") {
+            return val.trim_matches('"').to_string();
+        }
+    }
+    "unknown".to_string()
+}
+
 fn main() {
-    // 1. Значення за замовчуванням (якщо конфігу немає)
+    // 1. Визначаємо реальний дистрибутив системи з /etc/os-release
+    let system_id = detect_system_distro();
+
+    // 2. Значення за замовчуванням (якщо конфігу немає)
     let mut logo_cfg = "auto".to_string();
     let mut show_os = true;
     let mut show_kernel = true;
     let mut os_label = "os".to_string();
     let mut kernel_label = "kernel".to_string();
 
-    // 2. Читаємо ~/.config/ritch/config.nix (або створюємо дефолтний)
+    // 3. Читаємо ~/.config/ritch/config.nix (або створюємо дефолтний)
     if let Ok(home) = env::var("HOME") {
         let config_dir = format!("{home}/.config/ritch");
         let config_path = format!("{config_dir}/config.nix");
@@ -48,32 +200,40 @@ fn main() {
             let _ = fs::write(&config_path, DEFAULT_CONFIG);
         }
 
-        if let Ok(cfg_content) = fs::read_to_string(&config_path) {
+        // На NixOS використовуємо справжній інтерпретатор Nix (nix-instantiate),
+        // а на інших дистрибутивах (або як фолбек) — парсер rnix
+        let evaluated_nix = if system_id == "nixos" {
+            Command::new("nix-instantiate")
+                .args(["--eval", "--strict", &config_path])
+                .output()
+                .ok()
+                .filter(|out| out.status.success())
+                .and_then(|out| String::from_utf8(out.stdout).ok())
+                .or_else(|| fs::read_to_string(&config_path).ok())
+        } else {
+            fs::read_to_string(&config_path).ok()
+        };
+
+        if let Some(nix_src) = evaluated_nix
+            && let Some(cfg_map) = parse_nix_ast(&nix_src)
+        {
             show_os = false;
             show_kernel = false;
 
-            for line in cfg_content.lines() {
-                // Відрізаємо коментарі після '#'
-                let clean = line.split('#').next().unwrap_or("").trim();
-                // Розбираємо рядки виду: ключ = значення;
-                if let Some((key, val)) = clean.split_once('=') {
-                    let key = key.trim();
-                    let val = val.trim().trim_end_matches(';').trim().trim_matches('"');
-
-                    match key {
-                        "logo" => logo_cfg = val.to_string(),
-                        "showOs" => show_os = val == "true",
-                        "showKernel" => show_kernel = val == "true",
-                        "osLabel" => os_label = val.to_string(),
-                        "kernelLabel" => kernel_label = val.to_string(),
-                        _ => {}
-                    }
+            for (key, val) in cfg_map {
+                match (key.as_str(), val) {
+                    ("logo", NixValue::Str(s)) => logo_cfg = s,
+                    ("showOs", NixValue::Bool(b)) => show_os = b,
+                    ("showKernel", NixValue::Bool(b)) => show_kernel = b,
+                    ("osLabel", NixValue::Str(s)) => os_label = s,
+                    ("kernelLabel", NixValue::Str(s)) => kernel_label = s,
+                    _ => {}
                 }
             }
         }
     }
 
-    // 3. Визначаємо ID дистрибутива (пріоритет: --logo -> config.nix -> /etc/os-release)
+    // 4. Визначаємо ID для логотипу (пріоритет: --logo -> config.nix -> /etc/os-release)
     let args: Vec<String> = env::args().collect();
 
     let id: String = if args.len() >= 3 && args[1] == "--logo" {
@@ -81,16 +241,7 @@ fn main() {
     } else if logo_cfg != "auto" && !logo_cfg.is_empty() {
         logo_cfg
     } else {
-        let content = fs::read_to_string("/etc/os-release")
-            .expect("Не вдалось відкрити файл, перевірте чи файл є чи він не пошкоджений");
-        let mut fount = "unknown".to_string();
-        for line in content.lines() {
-            if let Some(val) = line.strip_prefix("ID=") {
-                fount = val.trim_matches('"').to_string();
-                break;
-            }
-        }
-        fount
+        system_id
     };
 
     // 4. Читаємо версію ядра
